@@ -1,0 +1,207 @@
+//CBLDB2  JOB ,REGION=0M,MSGLEVEL=(1,1),CLASS=7,NOTIFY=&SYSUID
+//        EXPORT SYMLIST=(DB2PGM)
+//        SET DB2PGM=TRANSFER
+//*
+//*  STEP 1 - COMPILE COBOL WITH SQL
+//*
+//COB     EXEC PGM=IGYCRCTL,
+//        PARM=(SQL,DYNAM,SOURCE,NOXREF)
+//STEPLIB  DD DSN=IGY650.SIGYCOMP,DISP=SHR
+//         DD DSN=CEE.SCEERUN,DISP=SHR
+//         DD DSN=CEE.SCEERUN2,DISP=SHR
+//         DD DSN=DSND10.DBDG.SDSNEXIT,DISP=SHR
+//         DD DSN=DSND10.SDSNLOAD,DISP=SHR
+//DBRMLIB  DD DSN=Z76164.DBRMLIB(TRANSFER),DISP=OLD
+//SYSIN    DD *
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. TRANSFER.
+       ENVIRONMENT DIVISION.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+      * DB2 COMMUNICATION AREA
+       EXEC SQL
+           INCLUDE SQLCA
+           END-EXEC.
+      * HOST VARIABLES
+       01 WS-FROM-ACCT    PIC X(10).
+       01 WS-TO-ACCT      PIC X(10).
+       01 WS-AMOUNT       PIC S9(7)V99 COMP-3.
+       01 WS-BALANCE      PIC S9(7)V99 COMP-3.
+       01 WS-TXN-DATE     PIC X(26).
+       01 WS-DBT          PIC X(3) VALUE 'DBT'.
+       01 WS-CRD          PIC X(3) VALUE 'CRD'.
+
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE 'ACC0000001'  TO WS-FROM-ACCT
+           MOVE 'ACC0000003'    TO WS-TO-ACCT
+           MOVE 500.00       TO WS-AMOUNT
+           MOVE '2026-05-03 13:38:32.076000'   TO WS-TXN-DATE
+
+      *--------------------------------------------
+      * STEP 1: CHECK SENDER BALANCE
+      *--------------------------------------------
+           EXEC SQL
+               SELECT BALANCE INTO :WS-BALANCE
+               FROM Z76164.WALLET
+               WHERE ACCT_NUM = :WS-FROM-ACCT
+           END-EXEC
+
+           IF SQLCODE = 100
+               DISPLAY 'SENDER ACCOUNT NOT FOUND: ' WS-FROM-ACCT
+               STOP RUN
+           END-IF
+
+           IF SQLCODE NOT = 0
+               DISPLAY 'ERROR FETCHING SENDER BALANCE SQLCODE: '
+                       SQLCODE
+               STOP RUN
+           END-IF
+
+           IF WS-BALANCE < WS-AMOUNT
+               DISPLAY 'INSUFFICIENT BALANCE'
+               DISPLAY 'CURRENT BALANCE: ' WS-BALANCE
+               DISPLAY 'REQUESTED AMOUNT: ' WS-AMOUNT
+               STOP RUN
+           END-IF
+
+      *--------------------------------------------
+      * STEP 2: DEBIT FROM SENDER WALLET
+      *--------------------------------------------
+           EXEC SQL
+               UPDATE Z76164.WALLET
+               SET BALANCE = BALANCE - :WS-AMOUNT
+               WHERE ACCT_NUM = :WS-FROM-ACCT
+           END-EXEC
+
+           IF SQLCODE = 0
+               DISPLAY 'SENDER WALLET DEBITED SUCCESSFULLY'
+           ELSE
+               DISPLAY 'ERROR DEBITING SENDER SQLCODE: ' SQLCODE
+               EXEC SQL ROLLBACK END-EXEC
+               STOP RUN
+           END-IF
+
+      *--------------------------------------------
+      * STEP 3: CREDIT TO RECEIVER WALLET
+      *--------------------------------------------
+           EXEC SQL
+               UPDATE Z76164.WALLET
+               SET BALANCE = BALANCE + :WS-AMOUNT
+               WHERE ACCT_NUM = :WS-TO-ACCT
+           END-EXEC
+
+           IF SQLCODE = 0
+               DISPLAY 'RECEIVER WALLET CREDITED SUCCESSFULLY'
+           ELSE
+               DISPLAY 'ERROR CREDITING RECEIVER SQLCODE: ' SQLCODE
+               EXEC SQL ROLLBACK END-EXEC
+               STOP RUN
+           END-IF
+
+      *--------------------------------------------
+      * STEP 4: RECORD DEBIT TRANSACTION FOR SENDER
+      *--------------------------------------------
+           EXEC SQL
+               INSERT INTO Z76164.TRANSACTIONS
+               (ACCT_NUM, TXN_TYPE, AMOUNT, TXN_DATE)
+               VALUES (:WS-FROM-ACCT, :WS-DBT,
+                       :WS-AMOUNT, :WS-TXN-DATE)
+           END-EXEC
+
+           IF SQLCODE = 0
+               DISPLAY 'DEBIT TRANSACTION RECORDED SUCCESSFULLY'
+           ELSE
+               DISPLAY 'ERROR RECORDING DEBIT TXN SQLCODE: ' SQLCODE
+               EXEC SQL ROLLBACK END-EXEC
+               STOP RUN
+           END-IF
+
+      *--------------------------------------------
+      * STEP 5: RECORD CREDIT TRANSACTION FOR RECEIVER
+      *--------------------------------------------
+           EXEC SQL
+               INSERT INTO Z76164.TRANSACTIONS
+               (ACCT_NUM, TXN_TYPE, AMOUNT, TXN_DATE)
+               VALUES (:WS-TO-ACCT, :WS-CRD,
+                       :WS-AMOUNT, :WS-TXN-DATE)
+           END-EXEC
+
+           IF SQLCODE = 0
+               DISPLAY 'CREDIT TRANSACTION RECORDED SUCCESSFULLY'
+           ELSE
+               DISPLAY 'ERROR RECORDING CREDIT TXN SQLCODE: ' SQLCODE
+               EXEC SQL ROLLBACK END-EXEC
+               STOP RUN
+           END-IF
+
+      *--------------------------------------------
+      * STEP 6: COMMIT ALL CHANGES
+      *--------------------------------------------
+           EXEC SQL
+               COMMIT
+           END-EXEC
+           DISPLAY 'TRANSFER COMPLETED SUCCESSFULLY'
+           STOP RUN.
+//SYSMDECK DD UNIT=SYSDA,SPACE=(800,(500,500))
+//SYSLIN   DD DSN=&&LOADSET,DISP=(MOD,PASS),UNIT=SYSDA,
+//         SPACE=(800,(500,500)),RECFM=FB,LRECL=80,BLKSIZE=3120
+//SYSPRINT DD SYSOUT=*
+//SYSUT1   DD UNIT=SYSDA,SPACE=(800,(500,500))
+//SYSUT2   DD UNIT=SYSDA,SPACE=(800,(500,500))
+//SYSUT3   DD UNIT=SYSDA,SPACE=(800,(500,500))
+//SYSUT4   DD UNIT=SYSDA,SPACE=(800,(500,500))
+//SYSUT5   DD UNIT=SYSDA,SPACE=(800,(500,500))
+//SYSUT6   DD UNIT=SYSDA,SPACE=(800,(500,500))
+//SYSUT7   DD UNIT=SYSDA,SPACE=(800,(500,500))
+//SYSUT8   DD UNIT=SYSDA,SPACE=(800,(500,500))
+//SYSUT9   DD UNIT=SYSDA,SPACE=(800,(500,500))
+//SYSUT10  DD UNIT=SYSDA,SPACE=(800,(500,500))
+//SYSUT11  DD UNIT=SYSDA,SPACE=(800,(500,500))
+//SYSUT12  DD UNIT=SYSDA,SPACE=(800,(500,500))
+//SYSUT13  DD UNIT=SYSDA,SPACE=(800,(500,500))
+//SYSUT14  DD UNIT=SYSDA,SPACE=(800,(500,500))
+//SYSUT15  DD UNIT=SYSDA,SPACE=(800,(500,500))
+//*
+//*  STEP 2 - LINK EDIT
+//*
+//LKED    EXEC PGM=IEWBLINK,
+//        PARM='LIST,XREF,RENT,AMODE=31,RMODE=ANY'
+//SYSLIB   DD DSN=CEE.SCEELKEX,DISP=SHR
+//         DD DSN=CEE.SCEELKED,DISP=SHR
+//         DD DSN=DSND10.DBDG.SDSNEXIT,DISP=SHR
+//         DD DSN=DSND10.SDSNLOAD,DISP=SHR
+//SYSLIN   DD DSN=&&LOADSET,DISP=(OLD,DELETE),
+//         RECFM=FB,LRECL=80,BLKSIZE=3120
+//SYSLMOD  DD DSN=Z76164.MFLNC.LOAD(TRANSFER),DISP=SHR
+//SYSPRINT DD SYSOUT=*
+//SYSIN    DD *
+  INCLUDE SYSLIB(DSNALI)
+/*
+//*
+//*  STEP 3 - BIND
+//*
+//BIND    EXEC PGM=IKJEFT01
+//STEPLIB  DD DSN=DSND10.SDSNLOAD,DISP=SHR
+//DBRMLIB  DD DSN=Z76164.DBRMLIB,DISP=SHR
+//SYSTSIN  DD *
+ DSN SYSTEM(DBDG)
+ BIND PLAN(Z76164) MEMBER(TRANSFER) LIB('Z76164.DBRMLIB') -
+      ACTION(REPLACE) ISOLATION(CS)
+ END
+/*
+//SYSTSPRT DD SYSOUT=*
+//SYSPRINT DD SYSOUT=*
+//*
+//*  STEP 4 - RUN
+//*
+//RUN     EXEC PGM=IKJEFT01
+//STEPLIB  DD DSN=DSND10.SDSNLOAD,DISP=SHR
+//SYSTSIN  DD *
+ DSN SYSTEM(DBDG)
+ RUN PROGRAM(TRANSFER) PLAN(Z76164) LIB('Z76164.MFLNC.LOAD')
+ END
+/*
+//SYSUDUMP DD SYSOUT=*
+//SYSTSPRT DD SYSOUT=*
+//SYSPRINT DD SYSOUT=*
