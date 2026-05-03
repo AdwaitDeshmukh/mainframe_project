@@ -8,3 +8,5 @@ dist/
 build/
 .next/
 out/
+backend/.env
+backend/.env.example
