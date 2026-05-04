@@ -6,7 +6,24 @@ const { sendWelcomeMail } = require('../utils/mailer');
 
 const router = express.Router();
 
-// POST /api/accounts/create
+function getNextAcctNum() {
+    const dataDir     = path.join(__dirname, '../data');
+    const counterFile = path.join(dataDir, 'counter.json');
+
+    if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+    }
+
+    let counter = 1;
+    if (fs.existsSync(counterFile)) {
+        counter = JSON.parse(fs.readFileSync(counterFile, 'utf8')).count;
+    }
+
+    fs.writeFileSync(counterFile, JSON.stringify({ count: counter + 1 }), 'utf8');
+
+    return 'ACC' + String(counter).padStart(7, '0');
+}
+
 router.post('/create', async (req, res) => {
     try {
         const { fname, lname, email, pin } = req.body;
@@ -19,7 +36,7 @@ router.post('/create', async (req, res) => {
             return res.status(400).json({ error: 'PIN must be 4 digits' });
         }
 
-        const acctNum = 'ACC' + Math.random().toString().slice(2, 12).padStart(10, '0');
+        const acctNum = getNextAcctNum();
         console.log(`\n📝 Creating account: ${acctNum}`);
 
         const templatePath = path.join(process.env.JCL_TEMPLATES_PATH || './jcl-templates', 'addaccount_template.jcl');
@@ -46,7 +63,6 @@ router.post('/create', async (req, res) => {
         const jobStatus = await waitForJobCompletion(jobId);
         const output = await getJobOutput(jobId);
 
-        // ── SEND WELCOME EMAIL ────────────────────────────
         try {
             await sendWelcomeMail({
                 email,
@@ -57,7 +73,6 @@ router.post('/create', async (req, res) => {
             });
         } catch (mailErr) {
             console.error('⚠️  Welcome email failed:', mailErr.message);
-            // Don't fail the whole request if email fails
         }
 
         res.json({
@@ -74,7 +89,6 @@ router.post('/create', async (req, res) => {
     }
 });
 
-// GET /api/accounts/:acctNum/balance?pin=XXXX
 router.get('/:acctNum/balance', async (req, res) => {
     try {
         const { acctNum } = req.params;
@@ -101,7 +115,6 @@ router.get('/:acctNum/balance', async (req, res) => {
     }
 });
 
-// Internal reusable function
 async function fetchBalance(acctNum) {
     console.log(`\n💰 Checking balance for: ${acctNum}`);
 
